@@ -3,6 +3,299 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>StockMaster V3.8 (全螢幕掃描版)</title>
+    
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, getDocs, updateDoc, doc, increment, query, where, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        
+        const firebaseConfig = {
+            apiKey: "AIzaSyD42okuxyOdqSJ8nAVtEwlu0PspzxK45Wk",
+            authDomain: "myhomestock.firebaseapp.com",
+            projectId: "myhomestock",
+            storageBucket: "myhomestock.firebasestorage.app",
+            messagingSenderId: "1017079171143",
+            appId: "1:1017079171143:web:cf575190e3954093e80962"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        window.db = getFirestore(app);
+        window.collection = collection; window.addDoc = addDoc; window.getDocs = getDocs;
+        window.updateDoc = updateDoc; window.deleteDoc = deleteDoc; window.doc = doc;
+        window.increment = increment; window.query = query; window.where = where;
+    </script>
+
+    <style>
+        body { background-color: #F3F4F6; -webkit-tap-highlight-color: transparent; }
+        .glass-header { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px); border-bottom: 1px solid rgba(0,0,0,0.05); }
+        .bottom-nav { padding-bottom: env(safe-area-inset-bottom); background: rgba(255,255,255,0.98); border-top: 1px solid #eee; }
+        
+        /* ★★★ 暴力修正：掃描時強制全螢幕黑底 ★★★ */
+        #reader-container {
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background-color: black;
+            z-index: 9999; /* 最高層級，蓋住所有白色 */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        #reader { 
+            width: 100% !important; 
+            height: 100% !important;
+            background: black;
+        }
+        
+        #reader video { 
+            width: 100% !important; 
+            height: 100% !important;
+            object-fit: cover !important; 
+        }
+
+        /* 掃描紅線 */
+        .scan-line { 
+            position: fixed; top: 50%; left: 10%; width: 80%; height: 2px; 
+            background: red; z-index: 10000; box-shadow: 0 0 5px red; 
+        }
+
+        /* 關閉按鈕 */
+        .close-btn {
+            position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%);
+            z-index: 10001;
+            background: white; color: black; padding: 10px 30px; border-radius: 30px;
+            font-weight: bold; box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 2000 });
+
+        function App() {
+            const [view, setView] = useState('home'); 
+            const [inventory, setInventory] = useState([]);
+            const [isScanning, setIsScanning] = useState(false); // 控制全螢幕掃描
+            const chartRef = useRef(null);
+            const scannerRef = useRef(null);
+
+            useEffect(() => { fetchData(); }, []);
+            useEffect(() => { if (view === 'home' && inventory.length > 0) initChart(); }, [view, inventory]);
+
+            const fetchData = async () => {
+                try {
+                    const q = await window.getDocs(window.collection(window.db, "inventory"));
+                    let items = [];
+                    q.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
+                    items.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+                    setInventory(items);
+                } catch(e) { console.error(e); }
+            };
+
+            const initChart = () => {
+                const ctx = document.getElementById('stockChart');
+                if (!ctx) return;
+                if (chartRef.current) chartRef.current.destroy();
+                let expired = 0, near = 0, good = 0;
+                const today = new Date();
+                inventory.forEach(i => {
+                    const days = (new Date(i.expiryDate) - today) / (1000 * 3600 * 24);
+                    if (days < 0) expired++; else if (days < 30) near++; else good++;
+                });
+                chartRef.current = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['正常', '即期', '過期'],
+                        datasets: [{ data: [good, near, expired], backgroundColor: ['#10B981', '#F59E0B', '#EF4444'], borderWidth: 0 }]
+                    },
+                    options: { cutout: '75%', plugins: { legend: { display: false } } }
+                });
+            };
+
+            // --- 全螢幕掃描啟動邏輯 ---
+            const startScan = () => {
+                setIsScanning(true);
+                // 延遲一點點，等全螢幕黑底出來後再開鏡頭
+                setTimeout(() => {
+                    const scanner = new Html5Qrcode("reader");
+                    scannerRef.current = scanner;
+                    
+                    scanner.start(
+                        { facingMode: "environment" }, 
+                        { fps: 10, qrbox: { width: 250, height: 150 }, aspectRatio: window.innerWidth/window.innerHeight },
+                        (decodedText) => {
+                            stopScan(); // 掃到就關閉
+                            handleScanSuccess(decodedText);
+                        },
+                        (err) => {}
+                    ).catch(err => {
+                        alert("相機啟動失敗: " + err);
+                        setIsScanning(false);
+                    });
+                }, 100);
+            };
+
+            const stopScan = () => {
+                if (scannerRef.current) {
+                    scannerRef.current.stop().then(() => {
+                        scannerRef.current.clear();
+                        setIsScanning(false);
+                    }).catch(() => setIsScanning(false));
+                } else {
+                    setIsScanning(false);
+                }
+            };
+
+            const handleScanSuccess = async (code) => {
+                if (navigator.vibrate) navigator.vibrate(200);
+                const q = window.query(window.collection(window.db, "inventory"), window.where("barcode", "==", code));
+                const snap = await window.getDocs(q);
+                let defaultName = snap.empty ? "" : snap.docs[0].data().name;
+
+                const { value: formValues } = await Swal.fire({
+                    title: '📦 掃描成功',
+                    html: `
+                        <div class="text-center font-mono text-lg font-bold text-blue-600 mb-2">${code}</div>
+                        <input id="swal-name" class="swal2-input" placeholder="產品名稱" value="${defaultName}">
+                        <input id="swal-date" type="date" class="swal2-input">
+                        <input id="swal-qty" type="number" class="swal2-input" placeholder="數量" value="1">
+                    `,
+                    focusConfirm: false,
+                    showCancelButton: true,
+                    confirmButtonText: '入庫',
+                    preConfirm: () => [
+                        document.getElementById('swal-name').value,
+                        document.getElementById('swal-date').value,
+                        document.getElementById('swal-qty').value
+                    ]
+                });
+
+                if (formValues) {
+                    const [name, date, qty] = formValues;
+                    if (!name || !date) return Swal.fire('請填寫完整', '', 'error');
+                    await window.addDoc(window.collection(window.db, "inventory"), {
+                        barcode: code, name, expiryDate: date, qty: parseInt(qty), timestamp: new Date()
+                    });
+                    Toast.fire({ icon: 'success', title: '入庫成功！' });
+                    fetchData();
+                }
+            };
+
+            const HomeView = () => (
+                <div className="pb-24 animate-fade-in">
+                    <div className="bg-blue-600 text-white p-6 pb-12 rounded-b-3xl shadow-lg relative overflow-hidden">
+                        <div className="relative z-10"><h1 className="text-2xl font-bold">StockMaster Pro</h1><p className="opacity-80 text-sm mt-1">庫存總數：{inventory.length} 筆</p></div>
+                        <i className="fas fa-cubes absolute -right-4 -bottom-4 text-9xl opacity-10"></i>
+                    </div>
+                    <div className="px-4 -mt-8 relative z-20">
+                        <div className="bg-white rounded-2xl shadow-md p-6 flex flex-col items-center">
+                            <h3 className="text-gray-500 text-sm font-bold tracking-wider mb-4">庫存狀態</h3>
+                            <div className="w-48 h-48 relative"><canvas id="stockChart"></canvas><div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none"><span className="text-3xl font-bold text-gray-800">{inventory.length}</span></div></div>
+                        </div>
+                    </div>
+                    <div className="px-4 mt-6">
+                        <h3 className="text-gray-800 font-bold mb-3 ml-1">功能選單</h3>
+                        <div className="grid grid-cols-2 gap-4">
+                            {/* 掃描按鈕：點擊後觸發 startScan */}
+                            <button onClick={startScan} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3 active:scale-95 transition">
+                                <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center"><i className="fas fa-barcode"></i></div>
+                                <div className="text-left"><p className="font-bold text-gray-800">掃描入庫</p><p className="text-xs text-gray-500">點擊開啟全螢幕</p></div>
+                            </button>
+                            
+                            <button onClick={() => setView('list')} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3 active:scale-95 transition">
+                                <div className="w-10 h-10 rounded-full bg-green-100 text-green-600 flex items-center justify-center"><i className="fas fa-clipboard-list"></i></div>
+                                <div className="text-left"><p className="font-bold text-gray-800">庫存清單</p></div>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+
+            const ListView = () => (
+                <div className="pb-24 pt-20 px-4 animate-fade-in">
+                    <div className="fixed top-0 left-0 w-full glass-header z-30 px-4 py-4 flex justify-between items-center"><h2 className="text-xl font-bold text-gray-800">📦 庫存明細</h2><button onClick={fetchData} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center active:bg-gray-200"><i className="fas fa-sync-alt text-xs"></i></button></div>
+                    <div className="space-y-3">
+                        {inventory.map(item => {
+                             const daysLeft = Math.ceil((new Date(item.expiryDate) - new Date()) / (1000 * 3600 * 24));
+                             let statusColor = "bg-green-100 text-green-700", statusText = "正常";
+                             if(daysLeft < 0) { statusColor = "bg-red-100 text-red-700"; statusText = "已過期"; }
+                             else if(daysLeft < 30) { statusColor = "bg-orange-100 text-orange-700"; statusText = "即期"; }
+                             return (
+                                <div key={item.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center">
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-1"><span className={`text-xs px-2 py-0.5 rounded-md font-bold ${statusColor}`}>{statusText}</span><span className="text-xs text-gray-400">{item.expiryDate}</span></div>
+                                        <h3 className="font-bold text-gray-800 text-lg">{item.name}</h3>
+                                        <p className="text-xs text-gray-400 font-mono mt-1">{item.barcode}</p>
+                                    </div>
+                                    <div className="flex flex-col items-end gap-2"><span className="text-2xl font-bold text-blue-600">x{item.qty}</span><button onClick={() => consumeItem(item.id, item.name, item.qty)} className="bg-red-50 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold active:bg-red-100">消耗</button></div>
+                                </div>
+                             )
+                        })}
+                        {inventory.length === 0 && <div className="text-center text-gray-400 mt-20">無資料</div>}
+                    </div>
+                </div>
+            );
+
+            const consumeItem = async (id, name, qty) => {
+                const result = await Swal.fire({ title: '消耗確認', text: `消耗 1 個 ${name}？`, icon: 'warning', showCancelButton: true, confirmButtonColor: '#d33', confirmButtonText: '消耗' });
+                if (result.isConfirmed) {
+                    if (qty <= 1) await window.deleteDoc(window.doc(window.db, "inventory", id));
+                    else await window.updateDoc(window.doc(window.db, "inventory", id), { qty: window.increment(-1) });
+                    Toast.fire({ icon: 'success', title: '已更新' }); fetchData();
+                }
+            };
+
+            return (
+                <div className="min-h-screen font-sans text-gray-900">
+                    {/* 一般頁面 (不掃描時顯示) */}
+                    {!isScanning && (
+                        <>
+                            {view === 'home' && <HomeView />} 
+                            {view === 'list' && <ListView />}
+                            
+                            <nav className="fixed bottom-0 w-full bottom-nav flex justify-around items-center z-50 h-16 text-xs font-medium text-gray-400">
+                                <button onClick={() => setView('home')} className={`flex flex-col items-center justify-center w-full h-full ${view === 'home' ? 'text-blue-600' : ''}`}><i className="fas fa-home text-xl mb-1"></i>首頁</button>
+                                {/* 凸起按鈕改成直接觸發全螢幕掃描 */}
+                                <div className="relative -top-5"><button onClick={startScan} className="w-14 h-14 rounded-full bg-blue-600 text-white shadow-lg flex items-center justify-center border-4 border-gray-100 active:scale-95 transition"><i className="fas fa-camera text-xl"></i></button></div>
+                                <button onClick={() => setView('list')} className={`flex flex-col items-center justify-center w-full h-full ${view === 'list' ? 'text-blue-600' : ''}`}><i className="fas fa-box-open text-xl mb-1"></i>列表</button>
+                            </nav>
+                        </>
+                    )}
+
+                    {/* ★★★ 全螢幕掃描覆蓋層 (只有點擊掃描時才出現) ★★★ */}
+                    {isScanning && (
+                        <div id="reader-container">
+                            <div id="reader"></div>
+                            <div className="scan-line"></div>
+                            <button onClick={stopScan} className="close-btn">
+                                <i className="fas fa-times mr-2"></i> 關閉相機
+                            </button>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+        const root = ReactDOM.createRoot(document.getElementById('root')); root.render(<App />);
+    </script>
+</body>
+</html><!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>StockMaster V3.7 (強制顯像版)</title>
     
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
