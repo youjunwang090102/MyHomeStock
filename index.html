@@ -3,253 +3,339 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MyHomeStock 家庭庫存管理</title>
+    <title>家庭庫存管理系統 Pro</title>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
-        /* 頁面美化樣式 */
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background-color: #f4f4f9; color: #333; }
-        h2 { text-align: center; color: #2c3e50; }
-        .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
-        input, button, select { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
-        button { background-color: #007bff; color: white; border: none; cursor: pointer; font-weight: bold; transition: background 0.2s; }
-        button:hover { background-color: #0056b3; }
-        button.secondary { background-color: #6c757d; }
-        button.delete-btn { background-color: #dc3545; width: auto; padding: 5px 10px; margin-left: 10px; font-size: 14px; }
-        .alert-box { background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: none; border: 1px solid #ffeeba; }
-        .success-msg { color: green; text-align: center; margin-top: 10px; font-weight: bold; display: none; }
-        #reader { width: 100%; margin-bottom: 10px; border-radius: 8px; overflow: hidden; }
-        ul { padding-left: 0; list-style: none; }
-        li { background: #fff; border-bottom: 1px solid #eee; padding: 10px; display: flex; justify-content: space-between; align-items: center; }
-        li:last-child { border-bottom: none; }
-        .item-info { flex-grow: 1; }
-        .exp-date { font-size: 0.9em; color: #666; }
-        .exp-warning { color: #d9534f; font-weight: bold; }
+        :root { --primary: #007bff; --success: #28a745; --danger: #dc3545; --bg: #f8f9fa; }
+        body { font-family: -apple-system, sans-serif; margin: 0; padding: 0; background: var(--bg); padding-bottom: 80px; }
+        
+        /* 導覽列 */
+        .navbar { position: fixed; bottom: 0; width: 100%; background: white; display: flex; justify-content: space-around; padding: 10px 0; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); z-index: 1000; }
+        .nav-btn { border: none; background: none; display: flex; flex-direction: column; align-items: center; color: #6c757d; font-size: 12px; }
+        .nav-btn i { font-size: 20px; margin-bottom: 4px; }
+        .nav-btn.active { color: var(--primary); font-weight: bold; }
+
+        /* 頁面容器 */
+        .page { display: none; padding: 20px; max-width: 600px; margin: 0 auto; }
+        .page.active { display: block; }
+        
+        /* 卡片樣式 */
+        .card { background: white; padding: 15px; border-radius: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 15px; }
+        .header { text-align: center; margin-bottom: 20px; color: #333; }
+        
+        /* 輸入控制項 */
+        input, select { width: 100%; padding: 12px; margin: 5px 0 15px; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; }
+        label { font-size: 14px; color: #666; font-weight: bold; }
+        
+        /* 按鈕 */
+        .btn { width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: bold; color: white; cursor: pointer; font-size: 16px; margin-top: 10px; }
+        .btn-scan { background: #6c757d; }
+        .btn-save { background: var(--primary); }
+        .btn-out { background: var(--danger); }
+        
+        /* 庫存列表 */
+        .stock-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #eee; }
+        .stock-info { flex-grow: 1; }
+        .stock-qty { font-size: 18px; font-weight: bold; color: var(--primary); min-width: 40px; text-align: right; }
+        .tag { font-size: 10px; padding: 2px 6px; border-radius: 4px; color: white; margin-left: 5px; }
+        .tag-exp { background: #ffc107; color: #333; }
+        .tag-loc { background: #17a2b8; }
+
+        /* 掃描視窗 */
+        #reader { width: 100%; border-radius: 8px; overflow: hidden; margin-bottom: 10px; display: none; }
     </style>
 </head>
 <body>
 
-    <h2>🏠 MyHomeStock 庫存管理</h2>
+    <div id="page-in" class="page active">
+        <h2 class="header">📦 商品入庫</h2>
+        <div class="card">
+            <button class="btn btn-scan" onclick="startScan('in')"><i class="fas fa-camera"></i> 掃描條碼</button>
+            <div id="reader-in"></div>
+            
+            <label>條碼</label>
+            <input type="text" id="in-barcode" placeholder="掃描或手輸">
+            
+            <label>名稱</label>
+            <input type="text" id="in-name" placeholder="自動帶入或手輸">
+            
+            <label>有效日期</label>
+            <input type="date" id="in-date">
+            
+            <label>數量</label>
+            <div style="display:flex; gap:10px;">
+                <button onclick="adjQty(-1)" style="width:40px; background:#ddd; color:black;">-</button>
+                <input type="number" id="in-qty" value="1" style="text-align:center; margin:0;">
+                <button onclick="adjQty(1)" style="width:40px; background:#ddd; color:black;">+</button>
+            </div>
 
-    <div id="alert-section" class="alert-box">
-        <h3>⚠️ 即將過期清單 (30天內)</h3>
-        <ul id="alert-list"></ul>
+            <label>位置</label>
+            <input type="text" id="in-loc" placeholder="例如: 儲藏室">
+            
+            <button class="btn btn-save" onclick="saveInbound()">確認入庫</button>
+        </div>
     </div>
 
-    <div class="card">
-        <h3>📦 新增/查詢商品</h3>
+    <div id="page-out" class="page">
+        <h2 class="header">📤 消耗/出庫</h2>
+        <div class="card">
+            <button class="btn btn-scan" onclick="startScan('out')"><i class="fas fa-camera"></i> 掃描要用的東西</button>
+            <div id="reader-out"></div>
+            <input type="text" id="out-barcode" placeholder="條碼..." onchange="searchStock(this.value)">
+        </div>
         
-        <div id="reader"></div>
-        <button onclick="startScan()" class="secondary">📷 啟動相機掃描條碼</button>
-        
-        <hr style="margin: 20px 0; border: 0; border-top: 1px solid #eee;">
-
-        <label>條碼：</label>
-        <input type="text" id="barcode" placeholder="掃描或手動輸入...">
-        
-        <label>品名：</label>
-        <input type="text" id="productName" placeholder="例如：維力炸醬麵 (自動記憶)">
-        
-        <label>有效期限：</label>
-        <input type="date" id="expiryDate">
-        
-        <label>存放位置：</label>
-        <input type="text" id="location" placeholder="例如：儲藏室A">
-
-        <button onclick="saveItem()">💾 確認入庫</button>
-        <div id="msg" class="success-msg">✅ 入庫成功！</div>
+        <div id="out-results">
+            <p style="text-align:center; color:#999;">請掃描或輸入條碼查詢庫存</p>
+        </div>
     </div>
 
-    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
-    
+    <div id="page-list" class="page">
+        <h2 class="header">📋 庫存總表</h2>
+        <div class="card">
+            <button class="btn" style="background:#17a2b8;" onclick="loadInventory()">🔄 重新整理列表</button>
+        </div>
+        <div id="inventory-list" class="card" style="padding:0;">
+            </div>
+    </div>
+
+    <nav class="navbar">
+        <button class="nav-btn active" onclick="switchPage('in', this)">
+            <i class="fas fa-box-open"></i> 入庫
+        </button>
+        <button class="nav-btn" onclick="switchPage('out', this)">
+            <i class="fas fa-sign-out-alt"></i> 出庫
+        </button>
+        <button class="nav-btn" onclick="switchPage('list', this)">
+            <i class="fas fa-list-alt"></i> 盤點
+        </button>
+    </nav>
+
     <script type="module">
-        // -----------------------------------------------------------
-        // 這裡使用的是穩定的 Firebase 版本 (v10.13.1)
-        // -----------------------------------------------------------
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js";
-        import { getFirestore, collection, addDoc, getDoc, setDoc, doc, query, where, getDocs, deleteDoc, Timestamp } 
-        from "https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js";
+        // ▼▼▼ Firebase 設定 (請貼上您的設定) ▼▼▼
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, getDoc, setDoc, doc, query, where, getDocs, updateDoc, deleteDoc, increment } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-        // 您的設定檔 (已填入)
+        // ★ 請在此貼上您的 firebaseConfig ★
         const firebaseConfig = {
-            apiKey: "AIzaSyD42okuxyOdqSJ8nAVtEwlu0PspzxK45Wk",
-            authDomain: "myhomestock.firebaseapp.com",
-            projectId: "myhomestock",
-            storageBucket: "myhomestock.firebasestorage.app",
-            messagingSenderId: "1017079171143",
-            appId: "1:1017079171143:web:cf575190e3954093e80962"
+            apiKey: "您的API_KEY",
+            authDomain: "您的專案ID.firebaseapp.com",
+            projectId: "您的專案ID",
+            storageBucket: "您的專案ID.appspot.com",
+            messagingSenderId: "...",
+            appId: "..."
         };
 
-        // 初始化 Firebase
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
-
-        // --- 功能 1: 掃描功能 ---
         let html5QrCode;
-        window.startScan = function() {
-            // 如果已經開啟，先關閉避免重複
-            if(html5QrCode) { 
-                html5QrCode.stop().then(() => { html5QrCode.clear(); });
-            }
-            
-            html5QrCode = new Html5Qrcode("reader");
-            html5QrCode.start(
-                { facingMode: "environment" }, // 使用後鏡頭
-                { fps: 10, qrbox: 250 },
-                (decodedText) => {
-                    // 掃描成功
-                    document.getElementById('barcode').value = decodedText;
-                    checkProductMemory(decodedText); // 查詢記憶
-                    // 掃描成功後自動停止相機
-                    html5QrCode.stop().then(() => {
-                         document.getElementById('reader').innerHTML = "";
-                    });
-                },
-                (errorMessage) => { /* 忽略掃描過程中的錯誤 */ }
-            );
-        }
 
-        // --- 功能 2: 記憶查詢 (輸入條碼後自動帶出名稱) ---
-        async function checkProductMemory(barcode) {
-            if(!barcode) return;
-            // 查詢 products_db 集合
-            const docRef = doc(db, "products_db", barcode);
-            
-            try {
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    document.getElementById('productName').value = data.name;
-                    document.getElementById('location').value = data.defaultLocation || "";
-                }
-            } catch (e) {
-                console.error("讀取錯誤:", e);
-                // 如果第一次執行遇到權限錯誤，通常是 Firestore Rules 沒設好
-            }
-        }
+        // --- 全域功能 ---
         
-        // 綁定條碼輸入框，手動輸入也可以觸發查詢
-        document.getElementById('barcode').addEventListener('change', (e) => checkProductMemory(e.target.value));
-
-        // --- 功能 3: 儲存入庫 ---
-        window.saveItem = async function() {
-            const barcode = document.getElementById('barcode').value;
-            const name = document.getElementById('productName').value;
-            const date = document.getElementById('expiryDate').value;
-            const loc = document.getElementById('location').value;
-            const msgDiv = document.getElementById('msg');
-
-            if(!barcode || !name || !date) { alert("請填寫 [條碼]、[品名] 與 [有效期限]！"); return; }
-
-            try {
-                // 1. 寫入庫存紀錄 (inventory)
-                await addDoc(collection(db, "inventory"), {
-                    barcode: barcode,
-                    name: name,
-                    expiryDate: date,
-                    location: loc,
-                    status: "active",
-                    createdAt: Timestamp.now()
-                });
-
-                // 2. 更新產品記憶 (products_db)，下次掃描就會記得
-                await setDoc(doc(db, "products_db", barcode), {
-                    name: name,
-                    defaultLocation: loc
-                });
-
-                // 顯示成功訊息並清空表單
-                msgDiv.style.display = "block";
-                setTimeout(() => {
-                    msgDiv.style.display = "none";
-                    document.getElementById('barcode').value = "";
-                    document.getElementById('productName').value = "";
-                    document.getElementById('expiryDate').value = "";
-                    // 位置通常不用清空，因為可能連續輸入同一櫃子的東西
-                }, 2000);
-                
-                // 重新整理列表
-                checkExpiringItems();
-
-            } catch (e) {
-                console.error("Error: ", e);
-                alert("儲存失敗！請確認 Firebase 規則是否已設為 Test Mode");
-            }
-        }
-
-        // --- 功能 4: 檢查即期品 (30天內) ---
-        async function checkExpiringItems() {
-            const today = new Date();
-            const future = new Date();
-            future.setDate(future.getDate() + 30);
+        // 頁面切換
+        window.switchPage = function(pageId, btn) {
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById('page-' + pageId).classList.add('active');
+            document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
             
-            // 轉換日期格式 yyyy-mm-dd
-            const futureStr = future.toISOString().split('T')[0];
+            if(pageId === 'list') loadInventory(); // 切換到列表時自動載入
+            if(html5QrCode) html5QrCode.stop(); // 切換頁面時關閉相機
+        }
 
-            // 查詢：過期日 <= 未來30天 且 狀態是 active
-            const q = query(collection(db, "inventory"), 
-                where("expiryDate", "<=", futureStr),
-                where("status", "==", "active")
-            );
+        // 啟動掃描
+        window.startScan = function(mode) {
+            const readerId = mode === 'in' ? 'reader-in' : 'reader-out';
+            document.getElementById(readerId).style.display = "block";
+            
+            html5QrCode = new Html5Qrcode(readerId);
+            html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 },
+                (decodedText) => {
+                    html5QrCode.stop();
+                    document.getElementById(readerId).style.display = "none";
+                    if(mode === 'in') {
+                        document.getElementById('in-barcode').value = decodedText;
+                        checkProductMemory(decodedText);
+                    } else {
+                        document.getElementById('out-barcode').value = decodedText;
+                        searchStock(decodedText);
+                    }
+                }
+            ).catch(err => alert("相機啟動失敗"));
+        }
+
+        // --- 入庫邏輯 ---
+
+        window.adjQty = (n) => {
+            let q = document.getElementById('in-qty');
+            let val = parseInt(q.value) + n;
+            if(val < 1) val = 1;
+            q.value = val;
+        }
+
+        // 查詢記憶
+        async function checkProductMemory(barcode) {
+            const docRef = doc(db, "products_memory", barcode);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                document.getElementById('in-name').value = docSnap.data().name;
+                document.getElementById('in-loc').value = docSnap.data().defaultLocation || "";
+            }
+        }
+
+        // 執行入庫
+        window.saveInbound = async function() {
+            const barcode = document.getElementById('in-barcode').value;
+            const name = document.getElementById('in-name').value;
+            const date = document.getElementById('in-date').value;
+            const loc = document.getElementById('in-loc').value;
+            const qty = parseInt(document.getElementById('in-qty').value);
+
+            if(!barcode || !name || !date) { alert("資料不完整"); return; }
 
             try {
+                // 1. 檢查是否已經有「同條碼 + 同日期」的庫存，有的話直接加數量
+                const q = query(collection(db, "inventory"), 
+                    where("barcode", "==", barcode),
+                    where("expiryDate", "==", date)
+                );
                 const querySnapshot = await getDocs(q);
-                const list = document.getElementById('alert-list');
-                const section = document.getElementById('alert-section');
-                
-                list.innerHTML = ""; // 清空舊列表
 
-                let hasItem = false;
-                querySnapshot.forEach((docSnap) => {
-                    const item = docSnap.data();
-                    const docId = docSnap.id;
-                    
-                    hasItem = true;
-                    const li = document.createElement('li');
-                    
-                    // 計算剩餘天數
-                    const daysLeft = Math.ceil((new Date(item.expiryDate) - new Date()) / (1000 * 60 * 60 * 24));
-                    
-                    let statusText = "";
-                    let colorClass = "";
-                    
-                    if (daysLeft < 0) {
-                        statusText = `(已過期 ${Math.abs(daysLeft)} 天)`;
-                        colorClass = "exp-warning";
-                    } else {
-                        statusText = `(剩 ${daysLeft} 天)`;
-                        colorClass = daysLeft <= 7 ? "exp-warning" : "";
-                    }
-
-                    li.innerHTML = `
-                        <div class="item-info">
-                            <span class="${colorClass}"><b>${item.name}</b> ${statusText}</span><br>
-                            <span class="exp-date">到期: ${item.expiryDate} | 位置: ${item.location}</span>
-                        </div>
-                        <button class="delete-btn" onclick="deleteItem('${docId}')">吃掉了</button>
-                    `;
-                    list.appendChild(li);
-                });
-
-                section.style.display = hasItem ? 'block' : 'none';
-            } catch (e) {
-                console.log("讀取列表失敗 (如果是第一次執行，且資料庫是空的，這是正常的)");
-            }
-        }
-
-        // --- 功能 5: 刪除/消耗商品 ---
-        // 因為 module 範圍問題，需將函式掛載到 window
-        window.deleteItem = async function(docId) {
-            if(confirm("確定這個東西已經吃掉或用完了嗎？")) {
-                try {
-                    await deleteDoc(doc(db, "inventory", docId));
-                    checkExpiringItems(); // 重新整理列表
-                } catch(e) {
-                    alert("刪除失敗");
+                if (!querySnapshot.empty) {
+                    // 已經有這批貨，更新數量
+                    const existingDoc = querySnapshot.docs[0];
+                    await updateDoc(existingDoc.ref, {
+                        qty: increment(qty),
+                        location: loc // 更新位置
+                    });
+                } else {
+                    // 新批次，新增一筆
+                    await addDoc(collection(db, "inventory"), {
+                        barcode, name, expiryDate: date, location: loc, qty: qty,
+                        searchKey: barcode // 方便搜尋
+                    });
                 }
+
+                // 2. 更新產品記憶
+                await setDoc(doc(db, "products_memory", barcode), { name, defaultLocation: loc });
+
+                alert("入庫成功！");
+                document.getElementById('in-barcode').value = "";
+                document.getElementById('in-qty').value = 1;
+            } catch (e) {
+                console.error(e);
+                alert("錯誤：" + e.message);
             }
         }
 
-        // 啟動時檢查一次
-        checkExpiringItems();
+        // --- 出庫邏輯 ---
+
+        // 搜尋該條碼的所有庫存批次
+        window.searchStock = async function(barcode) {
+            if(!barcode) return;
+            const container = document.getElementById('out-results');
+            container.innerHTML = "搜尋中...";
+
+            const q = query(collection(db, "inventory"), where("barcode", "==", barcode));
+            const snapshot = await getDocs(q);
+
+            container.innerHTML = "";
+            if(snapshot.empty) {
+                container.innerHTML = "<p style='text-align:center'>找不到庫存記錄</p>";
+                return;
+            }
+
+            // 顯示所有批次（例如：一個過期日是一批）
+            snapshot.forEach(docSnap => {
+                const item = docSnap.data();
+                const id = docSnap.id;
+                
+                // 製作出庫卡片
+                const div = document.createElement('div');
+                div.className = 'stock-item';
+                div.style.background = "#fff";
+                div.innerHTML = `
+                    <div class="stock-info">
+                        <strong>${item.name}</strong><br>
+                        <span class="tag tag-exp">效期: ${item.expiryDate}</span>
+                        <span class="tag tag-loc">${item.location}</span>
+                    </div>
+                    <div style="text-align:right">
+                        <div style="font-size:12px; color:#999;">目前: ${item.qty}</div>
+                        <button onclick="consumeItem('${id}', '${item.name}', 1)" style="background:#dc3545; color:white; border:none; padding:5px 10px; border-radius:5px; margin-top:5px;">消耗 1</button>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        // 執行扣庫存
+        window.consumeItem = async function(docId, name, amount) {
+            if(!confirm(`確定要消耗 1 個 ${name} 嗎？`)) return;
+            
+            const ref = doc(db, "inventory", docId);
+            const docSnap = await getDoc(ref);
+            if(docSnap.exists()) {
+                const currentQty = docSnap.data().qty;
+                if(currentQty <= 1) {
+                    await deleteDoc(ref); // 剩0就刪除
+                } else {
+                    await updateDoc(ref, { qty: increment(-1) });
+                }
+                alert("已扣除");
+                // 重新整理出庫列表
+                searchStock(docSnap.data().barcode);
+            }
+        }
+
+        // --- 庫存列表邏輯 ---
+        
+        window.loadInventory = async function() {
+            const list = document.getElementById('inventory-list');
+            list.innerHTML = "載入中...";
+            
+            // 抓取所有庫存
+            const snapshot = await getDocs(collection(db, "inventory"));
+            list.innerHTML = "";
+
+            if(snapshot.empty) {
+                list.innerHTML = "<p style='text-align:center; padding:20px;'>目前沒有任何庫存</p>";
+                return;
+            }
+
+            // 排序：快過期的排前面
+            let items = [];
+            snapshot.forEach(doc => items.push(doc.data()));
+            items.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+
+            const today = new Date().toISOString().split('T')[0];
+
+            items.forEach(item => {
+                // 判斷是否過期
+                let dateColor = item.expiryDate < today ? "red" : (item.expiryDate < getFutureDate(30) ? "orange" : "gray");
+                
+                const div = document.createElement('div');
+                div.className = 'stock-item';
+                div.innerHTML = `
+                    <div class="stock-info">
+                        <strong>${item.name}</strong>
+                        <div style="margin-top:4px;">
+                            <span class="tag" style="background:${dateColor}">效期: ${item.expiryDate}</span>
+                            <span class="tag tag-loc">${item.location}</span>
+                        </div>
+                    </div>
+                    <div class="stock-qty">x${item.qty}</div>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        function getFutureDate(days) {
+            const d = new Date();
+            d.setDate(d.getDate() + days);
+            return d.toISOString().split('T')[0];
+        }
+
     </script>
 </body>
 </html>
