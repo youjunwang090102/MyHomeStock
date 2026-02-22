@@ -2,8 +2,8 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WMS 企業級庫存戰情室</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>StockMaster Pro</title>
     
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
@@ -11,13 +11,13 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
         import { getFirestore, collection, addDoc, getDocs, updateDoc, doc, increment, query, where, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         
-        // ★★★ 您的專屬設定 ★★★
         const firebaseConfig = {
             apiKey: "AIzaSyD42okuxyOdqSJ8nAVtEwlu0PspzxK45Wk",
             authDomain: "myhomestock.firebaseapp.com",
@@ -27,30 +27,21 @@
             appId: "1:1017079171143:web:cf575190e3954093e80962"
         };
 
-        // 初始化並掛載到 window 全域變數，讓下方的 React 使用
         const app = initializeApp(firebaseConfig);
         window.db = getFirestore(app);
-        
-        // 將 Firebase 功能掛載給 React 使用
-        window.collection = collection;
-        window.addDoc = addDoc;
-        window.getDocs = getDocs;
-        window.updateDoc = updateDoc;
-        window.deleteDoc = deleteDoc;
-        window.doc = doc;
-        window.increment = increment;
-        window.query = query;
-        window.where = where;
-
-        console.log("Firebase initialized successfully!");
+        window.collection = collection; window.addDoc = addDoc; window.getDocs = getDocs;
+        window.updateDoc = updateDoc; window.deleteDoc = deleteDoc; window.doc = doc;
+        window.increment = increment; window.query = query; window.where = where;
     </script>
 
     <style>
-        .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
-        body { background-color: #f3f4f6; }
-        /* 隱藏滾動條但保留功能 */
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        /* APP 質感微調 */
+        body { background-color: #F3F4F6; -webkit-tap-highlight-color: transparent; }
+        .glass-header { background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(10px); border-bottom: 1px solid rgba(0,0,0,0.05); }
+        .bottom-nav { padding-bottom: env(safe-area-inset-bottom); background: rgba(255,255,255,0.98); border-top: 1px solid #eee; }
+        .hide-scroll::-webkit-scrollbar { display: none; }
+        /* 掃描框樣式 */
+        #reader video { object-fit: cover; border-radius: 12px; }
     </style>
 </head>
 <body>
@@ -59,346 +50,288 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // --- 元件：KPI 數據卡片 ---
-        const KPICard = ({ title, value, icon, color, subtext }) => (
-            <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between transition hover:shadow-md">
-                <div>
-                    <p className="text-gray-500 text-sm font-semibold uppercase tracking-wider">{title}</p>
-                    <h3 className="text-3xl font-bold text-gray-800 mt-1">{value}</h3>
-                    <p className={`text-xs mt-2 font-medium ${color === 'red' ? 'text-red-500' : 'text-green-500'}`}>
-                        {subtext}
-                    </p>
-                </div>
-                <div className={`p-4 rounded-full bg-opacity-10 ${color === 'blue' ? 'bg-blue-500 text-blue-600' : color === 'red' ? 'bg-red-500 text-red-600' : 'bg-green-500 text-green-600'}`}>
-                    <i className={`fas ${icon} text-2xl`}></i>
-                </div>
-            </div>
-        );
+        // --- 專業通知工具 ---
+        const Toast = Swal.mixin({
+            toast: true, position: 'top-end', showConfirmButton: false, timer: 2000,
+            timerProgressBar: true,
+            didOpen: (toast) => { toast.onmouseenter = Swal.stopTimer; toast.onmouseleave = Swal.resumeTimer; }
+        });
 
-        // --- 主程式 ---
         function App() {
-            const [view, setView] = useState('dashboard'); 
+            const [view, setView] = useState('home'); // home, scan, list
             const [inventory, setInventory] = useState([]);
             const [loading, setLoading] = useState(false);
-            const [scanResult, setScanResult] = useState("");
-            const [stats, setStats] = useState({ totalItems: 0, totalValue: 0, lowStock: 0 });
-            const scannerRef = useRef(null);
+            const [chartData, setChartData] = useState(null);
+            const chartRef = useRef(null);
 
+            // 初始化與讀取數據
             useEffect(() => {
                 fetchData();
             }, []);
 
+            // 數據更新時重繪圖表
+            useEffect(() => {
+                if (view === 'home' && inventory.length > 0) {
+                    initChart();
+                }
+            }, [view, inventory]);
+
             const fetchData = async () => {
                 setLoading(true);
                 try {
-                    if(window.db) {
-                        const querySnapshot = await window.getDocs(window.collection(window.db, "inventory"));
-                        let items = [];
-                        let totalQ = 0;
-                        let low = 0;
-                        const today = new Date();
-                        
-                        querySnapshot.forEach((doc) => {
-                            const d = doc.data();
-                            items.push({ id: doc.id, ...d });
-                            totalQ += parseInt(d.qty || 0);
-                            
-                            const expDate = new Date(d.expiryDate);
-                            const diffTime = expDate - today;
-                            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
-                            
-                            if(diffDays < 30) low++;
-                        });
-                        
-                        // 依照日期排序
-                        items.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
-                        
-                        setInventory(items);
-                        setStats({ totalItems: totalQ, totalValue: items.length * 100, lowStock: low });
-                    }
-                } catch(e) { 
-                    console.error("讀取失敗:", e); 
-                    // 如果是用戶還沒設 Rules，這裡通常會報錯
-                }
+                    const q = await window.getDocs(window.collection(window.db, "inventory"));
+                    let items = [];
+                    q.forEach(doc => items.push({ id: doc.id, ...doc.data() }));
+                    // 按過期日排序
+                    items.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+                    setInventory(items);
+                } catch(e) { console.error(e); }
                 setLoading(false);
             };
 
-            const startScanner = () => {
-                if(scannerRef.current) return; // 避免重複啟動
+            const initChart = () => {
+                const ctx = document.getElementById('stockChart');
+                if (!ctx) return;
                 
-                // 確保 DOM 已經渲染
-                setTimeout(() => {
-                    const scanner = new Html5Qrcode("reader");
-                    scannerRef.current = scanner;
-                    scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, 
-                        (decodedText) => {
-                            setScanResult(decodedText);
-                            stopScanner();
-                        }
-                    ).catch(err => console.error("相機啟動失敗", err));
-                }, 100);
-            };
+                // 銷毀舊圖表
+                if (chartRef.current) chartRef.current.destroy();
 
-            const stopScanner = () => {
-                if(scannerRef.current) {
-                    scannerRef.current.stop().then(() => {
-                        scannerRef.current = null;
-                        document.getElementById("reader").innerHTML = "";
-                    }).catch(err => console.error(err));
-                }
-            };
+                // 計算數據
+                const today = new Date();
+                let expired = 0, near = 0, good = 0;
+                inventory.forEach(i => {
+                    const days = (new Date(i.expiryDate) - today) / (1000 * 3600 * 24);
+                    if (days < 0) expired++;
+                    else if (days < 30) near++;
+                    else good++;
+                });
 
-            // 入庫
-            const handleInbound = async (e) => {
-                e.preventDefault();
-                const barcode = scanResult || e.target.barcodeInput?.value || "MANUAL-" + Date.now();
-                const name = e.target.name.value;
-                const qty = parseInt(e.target.qty.value);
-                const date = e.target.date.value;
-                const loc = e.target.loc.value;
-
-                if(!window.db) return alert("Firebase 未連線");
-
-                // 檢查是否已有相同批次 (同條碼 + 同日期)
-                const q = window.query(
-                    window.collection(window.db, "inventory"), 
-                    window.where("barcode", "==", barcode),
-                    window.where("expiryDate", "==", date)
-                );
-                
-                const snapshot = await window.getDocs(q);
-
-                if(!snapshot.empty) {
-                    // 更新舊資料
-                    const docRef = snapshot.docs[0].ref;
-                    await window.updateDoc(docRef, { qty: window.increment(qty) });
-                    alert(`✅ 已併入現有批次，數量 +${qty}`);
-                } else {
-                    // 新增資料
-                    await window.addDoc(window.collection(window.db, "inventory"), {
-                        barcode: barcode,
-                        name: name,
-                        qty: qty,
-                        expiryDate: date,
-                        location: loc,
-                        timestamp: new Date()
-                    });
-                    alert("✅ 入庫成功");
-                }
-                
-                e.target.reset();
-                setScanResult("");
-                fetchData();
-                setView('dashboard');
-            };
-
-            // 消耗/出庫
-            const handleConsume = async (id, currentQty) => {
-                if(!confirm("確定要消耗 1 個單位嗎？")) return;
-                
-                const docRef = window.doc(window.db, "inventory", id);
-                if(currentQty <= 1) {
-                    await window.deleteDoc(docRef);
-                } else {
-                    await window.updateDoc(docRef, { qty: window.increment(-1) });
-                }
-                fetchData(); // 重新整理
+                chartRef.current = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['正常', '即期', '過期'],
+                        datasets: [{
+                            data: [good, near, expired],
+                            backgroundColor: ['#10B981', '#F59E0B', '#EF4444'],
+                            borderWidth: 0
+                        }]
+                    },
+                    options: { 
+                        cutout: '75%', 
+                        plugins: { legend: { position: 'bottom' } } 
+                    }
+                });
             };
 
             // --- 視圖元件 ---
-            
-            const DashboardView = () => (
-                <div className="space-y-6 animate-fade-in-up">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <KPICard title="總庫存數量" value={stats.totalItems} icon="fa-boxes" color="blue" subtext="現有商品總數" />
-                        <KPICard title="庫存警示" value={stats.lowStock} icon="fa-exclamation-triangle" color="red" subtext="30天內到期" />
-                        <KPICard title="系統狀態" value="Online" icon="fa-wifi" color="green" subtext="雲端同步中" />
+
+            const HomeView = () => (
+                <div className="pb-24 animate-fade-in">
+                    {/* 頂部歡迎卡 */}
+                    <div className="bg-blue-600 text-white p-6 pb-12 rounded-b-3xl shadow-lg relative overflow-hidden">
+                        <div className="relative z-10">
+                            <h1 className="text-2xl font-bold">我的庫存戰情室</h1>
+                            <p className="opacity-80 text-sm mt-1">目前共有 {inventory.length} 項產品紀錄</p>
+                        </div>
+                        <i className="fas fa-cubes absolute -right-4 -bottom-4 text-9xl opacity-10"></i>
                     </div>
 
-                    <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                        <h3 className="text-lg font-bold text-gray-800 mb-4">最近入庫紀錄</h3>
-                        <div className="text-sm text-gray-500">
-                           {inventory.slice(0, 5).map(item => (
-                               <div key={item.id} className="flex justify-between py-2 border-b last:border-0">
-                                   <span>{item.name}</span>
-                                   <span>{item.expiryDate}</span>
-                               </div>
-                           ))}
-                           {inventory.length === 0 && <p className="text-center py-4">尚無資料</p>}
+                    {/* 數據卡片區 - 上移覆蓋 */}
+                    <div className="px-4 -mt-8 relative z-20">
+                        <div className="bg-white rounded-2xl shadow-md p-6 flex flex-col items-center">
+                            <h3 className="text-gray-500 text-sm font-bold tracking-wider mb-4">庫存健康度分佈</h3>
+                            <div className="w-48 h-48 relative">
+                                <canvas id="stockChart"></canvas>
+                                {/* 中間文字 */}
+                                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                                    <span className="text-3xl font-bold text-gray-800">{inventory.length}</span>
+                                    <span className="text-xs text-gray-400">總批次</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* 快捷操作 */}
+                    <div className="px-4 mt-6">
+                        <h3 className="text-gray-800 font-bold mb-3 ml-1">快捷功能</h3>
+                        <div className="grid grid-cols-2 gap-4">
+                            <button onClick={() => setView('scan')} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3 active:scale-95 transition">
+                                <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center"><i className="fas fa-barcode"></i></div>
+                                <div className="text-left"><p className="font-bold text-gray-800">快速入庫</p><p className="text-xs text-gray-500">掃描新增商品</p></div>
+                            </button>
+                            <button onClick={() => setView('list')} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3 active:scale-95 transition">
+                                <div className="w-10 h-10 rounded-full bg-green-100 text-green-600 flex items-center justify-center"><i className="fas fa-clipboard-list"></i></div>
+                                <div className="text-left"><p className="font-bold text-gray-800">盤點管理</p><p className="text-xs text-gray-500">查看所有明細</p></div>
+                            </button>
                         </div>
                     </div>
                 </div>
             );
 
-            const InboundView = () => (
-                <div className="max-w-xl mx-auto bg-white p-6 md:p-8 rounded-2xl shadow-lg border border-gray-100 relative">
-                    <h2 className="text-2xl font-bold mb-6 text-gray-800 border-b pb-4">📦 標準入庫</h2>
-                    
-                    <div id="reader" className="w-full mb-4 rounded-lg overflow-hidden bg-black"></div>
-                    
-                    {!scanResult ? (
-                        <button onClick={startScanner} type="button" className="w-full mb-6 bg-gray-800 text-white py-3 rounded-lg hover:bg-gray-700 transition flex items-center justify-center gap-2">
-                            <i className="fas fa-barcode"></i> 啟動掃描槍
-                        </button>
-                    ) : (
-                        <div className="mb-6 bg-green-50 p-3 rounded-lg border border-green-200 text-green-800 flex justify-between items-center">
-                            <span>掃描到: <strong>{scanResult}</strong></span>
-                            <button onClick={() => {setScanResult(""); stopScanner();}} className="text-sm underline">重新掃描</button>
-                        </div>
-                    )}
+            const ScannerView = () => {
+                const [scanStatus, setStatus] = useState("請對準條碼");
+                
+                useEffect(() => {
+                    const scanner = new Html5Qrcode("reader");
+                    scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, 
+                        (decodedText) => {
+                            scanner.stop();
+                            handleScanSuccess(decodedText);
+                        }
+                    ).catch(() => setStatus("無法啟動相機 (請允許權限)"));
+                    return () => { try { scanner.stop(); } catch(e){} };
+                }, []);
 
-                    <form onSubmit={handleInbound} className="space-y-4">
-                        {!scanResult && (
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700">條碼 ID (未掃描時手輸)</label>
-                                <input name="barcodeInput" type="text" className="mt-1 block w-full px-4 py-3 bg-gray-50 border border-gray-300 rounded-lg" placeholder="可選..." />
-                            </div>
-                        )}
+                const handleScanSuccess = async (code) => {
+                    // 1. 查詢是否已有此商品
+                    const q = window.query(window.collection(window.db, "inventory"), window.where("barcode", "==", code));
+                    const snap = await window.getDocs(q);
+                    
+                    let defaultName = "";
+                    if (!snap.empty) defaultName = snap.docs[0].data().name;
+
+                    // 2. 彈出專業表單
+                    const { value: formValues } = await Swal.fire({
+                        title: '📦 商品入庫',
+                        html: `
+                            <div class="text-left text-sm mb-1 text-gray-500">條碼: ${code}</div>
+                            <input id="swal-name" class="swal2-input" placeholder="產品名稱" value="${defaultName}">
+                            <input id="swal-date" type="date" class="swal2-input">
+                            <input id="swal-qty" type="number" class="swal2-input" placeholder="數量" value="1">
+                        `,
+                        focusConfirm: false,
+                        showCancelButton: true,
+                        confirmButtonText: '確認儲存',
+                        cancelButtonText: '取消',
+                        preConfirm: () => {
+                            return [
+                                document.getElementById('swal-name').value,
+                                document.getElementById('swal-date').value,
+                                document.getElementById('swal-qty').value
+                            ]
+                        }
+                    });
+
+                    if (formValues) {
+                        const [name, date, qty] = formValues;
+                        if (!name || !date || !qty) return Swal.fire('錯誤', '資料不完整', 'error');
+
+                        await window.addDoc(window.collection(window.db, "inventory"), {
+                            barcode: code, name, expiryDate: date, qty: parseInt(qty), 
+                            timestamp: new Date()
+                        });
                         
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700">產品名稱</label>
-                                <input name="name" type="text" required className="mt-1 block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-blue-500" placeholder="例: 鮮奶" />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700">數量</label>
-                                <input name="qty" type="number" defaultValue="1" className="mt-1 block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-blue-500" />
-                            </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700">有效日期</label>
-                                <input name="date" type="date" required className="mt-1 block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-blue-500" />
-                            </div>
-                            <div>
-                                <label className="block text-sm font-medium text-gray-700">存放位置</label>
-                                <input name="loc" type="text" placeholder="例: A-01" className="mt-1 block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-blue-500" />
+                        Toast.fire({ icon: 'success', title: '入庫成功！' });
+                        setView('home');
+                        fetchData();
+                    } else {
+                        setView('home'); // 取消則回首頁
+                    }
+                };
+
+                return (
+                    <div className="h-full flex flex-col bg-black">
+                        <div className="relative flex-1">
+                            <div id="reader" className="w-full h-full"></div>
+                            <div className="absolute top-10 left-0 w-full text-center text-white text-shadow">
+                                <p className="text-xl font-bold">{scanStatus}</p>
                             </div>
                         </div>
-                        <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition shadow-lg shadow-blue-500/30">
-                            確認入庫 (Confirm)
+                        <div className="p-6 bg-white rounded-t-2xl">
+                            <button onClick={() => setView('home')} className="w-full py-3 bg-gray-100 text-gray-600 rounded-xl font-bold">取消掃描</button>
+                        </div>
+                    </div>
+                );
+            };
+
+            const ListView = () => (
+                <div className="pb-24 pt-20 px-4 animate-fade-in">
+                     {/* Sticky Header */}
+                    <div className="fixed top-0 left-0 w-full glass-header z-30 px-4 py-4 flex justify-between items-center">
+                        <h2 className="text-xl font-bold text-gray-800">📦 庫存明細</h2>
+                        <button onClick={fetchData} className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-gray-600 active:bg-gray-200">
+                            <i className="fas fa-sync-alt text-xs"></i>
                         </button>
-                    </form>
-                </div>
-            );
-
-            const InventoryView = () => (
-                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden pb-20">
-                    <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-                        <h3 className="text-lg font-bold text-gray-800">SKU 列表 ({inventory.length})</h3>
-                        <button onClick={fetchData} className="text-blue-600 hover:text-blue-800 text-sm font-bold bg-white px-3 py-1 rounded border shadow-sm"><i className="fas fa-sync-alt"></i> 刷新</button>
                     </div>
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm text-left text-gray-500">
-                            <thead className="text-xs text-gray-700 uppercase bg-gray-100">
-                                <tr>
-                                    <th className="px-4 py-3">品名</th>
-                                    <th className="px-4 py-3">數量</th>
-                                    <th className="px-4 py-3">效期/狀態</th>
-                                    <th className="px-4 py-3">位置</th>
-                                    <th className="px-4 py-3 text-right">操作</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {inventory.map((item) => {
-                                    const today = new Date().toISOString().split('T')[0];
-                                    const isExpired = item.expiryDate < today;
-                                    const isNear = item.expiryDate < new Date(Date.now() + 30*86400000).toISOString().split('T')[0];
-                                    
-                                    return (
-                                        <tr key={item.id} className="bg-white border-b hover:bg-gray-50 transition">
-                                            <td className="px-4 py-4 font-bold text-gray-800">{item.name} <br/><span className="text-xs text-gray-400 font-normal">{item.barcode}</span></td>
-                                            <td className="px-4 py-4 text-lg">{item.qty}</td>
-                                            <td className="px-4 py-4">
-                                                <div className="flex flex-col gap-1">
-                                                    <span className="text-gray-900">{item.expiryDate}</span>
-                                                    {isExpired ? 
-                                                        <span className="inline-block px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-800 w-fit">已過期</span> :
-                                                        (isNear ? <span className="inline-block px-2 py-0.5 rounded text-xs font-bold bg-orange-100 text-orange-800 w-fit">即期品</span> :
-                                                        <span className="inline-block px-2 py-0.5 rounded text-xs font-bold bg-green-100 text-green-800 w-fit">正常</span>)
-                                                    }
-                                                </div>
-                                            </td>
-                                            <td className="px-4 py-4"><span className="bg-gray-100 px-2 py-1 rounded text-xs">{item.location || '未定'}</span></td>
-                                            <td className="px-4 py-4 text-right">
-                                                <button onClick={() => handleConsume(item.id, item.qty)} className="bg-red-50 text-red-600 hover:bg-red-100 px-3 py-1 rounded border border-red-200 text-xs font-bold transition">
-                                                    消耗 -1
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                                {inventory.length === 0 && (
-                                    <tr><td colSpan="5" className="text-center py-10 text-gray-400">目前倉庫空空如也</td></tr>
-                                )}
-                            </tbody>
-                        </table>
+
+                    <div className="space-y-3">
+                        {inventory.map(item => {
+                             const daysLeft = Math.ceil((new Date(item.expiryDate) - new Date()) / (1000 * 3600 * 24));
+                             let statusColor = "bg-green-100 text-green-700";
+                             let statusText = `${daysLeft}天過期`;
+                             if(daysLeft < 0) { statusColor = "bg-red-100 text-red-700"; statusText = "已過期"; }
+                             else if(daysLeft < 30) { statusColor = "bg-orange-100 text-orange-700"; statusText = "即將過期"; }
+
+                             return (
+                                <div key={item.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex justify-between items-center">
+                                    <div>
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className={`text-xs px-2 py-0.5 rounded-md font-bold ${statusColor}`}>{statusText}</span>
+                                            <span className="text-xs text-gray-400">{item.expiryDate}</span>
+                                        </div>
+                                        <h3 className="font-bold text-gray-800 text-lg">{item.name}</h3>
+                                        <p className="text-xs text-gray-400 font-mono mt-1">ID: {item.barcode}</p>
+                                    </div>
+                                    <div className="flex flex-col items-end gap-2">
+                                        <span className="text-2xl font-bold text-blue-600">x{item.qty}</span>
+                                        <button onClick={() => consumeItem(item.id, item.name, item.qty)} className="bg-red-50 text-red-600 px-3 py-1.5 rounded-lg text-xs font-bold active:bg-red-100">
+                                            消耗
+                                        </button>
+                                    </div>
+                                </div>
+                             )
+                        })}
+                        {inventory.length === 0 && <div className="text-center text-gray-400 mt-20">沒有庫存資料</div>}
                     </div>
                 </div>
             );
 
-            // --- 佈局與導航 ---
+            const consumeItem = async (id, name, qty) => {
+                const result = await Swal.fire({
+                    title: '消耗確認',
+                    text: `要消耗 1 個 ${name} 嗎？`,
+                    icon: 'warning',
+                    showCancelButton: true,
+                    confirmButtonColor: '#d33',
+                    confirmButtonText: '消耗',
+                    cancelButtonText: '取消'
+                });
+
+                if (result.isConfirmed) {
+                    if (qty <= 1) await window.deleteDoc(window.doc(window.db, "inventory", id));
+                    else await window.updateDoc(window.doc(window.db, "inventory", id), { qty: window.increment(-1) });
+                    
+                    Toast.fire({ icon: 'success', title: '已更新庫存' });
+                    fetchData();
+                }
+            };
+
+            // --- 主框架 ---
             return (
-                <div className="flex h-screen overflow-hidden font-sans">
-                    {/* PC 側邊欄 */}
-                    <div className="w-64 bg-slate-900 text-white hidden md:flex flex-col shadow-2xl z-20">
-                        <div className="p-6 text-2xl font-bold tracking-tighter flex items-center gap-2 border-b border-slate-800">
-                            <i className="fas fa-cube text-blue-500"></i> PRO<span className="text-blue-500">WMS</span>
-                        </div>
-                        <nav className="flex-1 px-4 space-y-2 mt-6">
-                            <button onClick={() => setView('dashboard')} className={`w-full text-left px-4 py-3 rounded-xl transition flex items-center gap-3 ${view === 'dashboard' ? 'bg-blue-600 shadow-lg shadow-blue-900/50 text-white' : 'hover:bg-slate-800 text-slate-400'}`}>
-                                <i className="fas fa-chart-pie w-6"></i> 戰情總覽
+                <div className="min-h-screen font-sans text-gray-900">
+                    {view === 'home' && <HomeView />}
+                    {view === 'scan' && <ScannerView />}
+                    {view === 'list' && <ListView />}
+
+                    {/* 底部導航 (TabBar) - 只有非掃描頁面顯示 */}
+                    {view !== 'scan' && (
+                        <nav className="fixed bottom-0 w-full bottom-nav flex justify-around items-center z-50 h-16 text-xs font-medium text-gray-400">
+                            <button onClick={() => setView('home')} className={`flex flex-col items-center justify-center w-full h-full ${view === 'home' ? 'text-blue-600' : ''}`}>
+                                <i className={`fas fa-home text-xl mb-1 transition ${view === 'home' ? '-translate-y-1' : ''}`}></i> 首頁
                             </button>
-                            <button onClick={() => setView('inbound')} className={`w-full text-left px-4 py-3 rounded-xl transition flex items-center gap-3 ${view === 'inbound' ? 'bg-blue-600 shadow-lg shadow-blue-900/50 text-white' : 'hover:bg-slate-800 text-slate-400'}`}>
-                                <i className="fas fa-dolly w-6"></i> 入庫作業
-                            </button>
-                            <button onClick={() => {setView('inventory'); fetchData();}} className={`w-full text-left px-4 py-3 rounded-xl transition flex items-center gap-3 ${view === 'inventory' ? 'bg-blue-600 shadow-lg shadow-blue-900/50 text-white' : 'hover:bg-slate-800 text-slate-400'}`}>
-                                <i className="fas fa-boxes w-6"></i> 庫存報表
+                            
+                            {/* 中央凸起掃描鈕 */}
+                            <div className="relative -top-5">
+                                <button onClick={() => setView('scan')} className="w-14 h-14 rounded-full bg-blue-600 text-white shadow-lg shadow-blue-600/30 flex items-center justify-center border-4 border-gray-100 active:scale-95 transition">
+                                    <i className="fas fa-camera text-xl"></i>
+                                </button>
+                            </div>
+
+                            <button onClick={() => setView('list')} className={`flex flex-col items-center justify-center w-full h-full ${view === 'list' ? 'text-blue-600' : ''}`}>
+                                <i className={`fas fa-box-open text-xl mb-1 transition ${view === 'list' ? '-translate-y-1' : ''}`}></i> 庫存
                             </button>
                         </nav>
-                        <div className="p-4 border-t border-slate-800 text-xs text-slate-500 text-center">
-                            Enterprise Edition v2.1
-                        </div>
-                    </div>
-
-                    {/* 手機底部導航 */}
-                    <div className="md:hidden fixed bottom-0 w-full bg-white border-t z-50 flex justify-around py-2 text-xs shadow-[0_-5px_20px_rgba(0,0,0,0.05)] safe-area-pb">
-                        <button onClick={() => setView('dashboard')} className={`flex flex-col items-center p-2 rounded-lg ${view === 'dashboard' ? 'text-blue-600' : 'text-gray-400'}`}>
-                            <i className="fas fa-chart-pie text-xl mb-1"></i> 總覽
-                        </button>
-                        <button onClick={() => setView('inbound')} className={`flex flex-col items-center justify-center w-14 h-14 -mt-8 bg-blue-600 rounded-full shadow-lg shadow-blue-500/40 border-4 border-gray-100 text-white`}>
-                            <i className="fas fa-plus text-xl"></i>
-                        </button>
-                        <button onClick={() => {setView('inventory'); fetchData();}} className={`flex flex-col items-center p-2 rounded-lg ${view === 'inventory' ? 'text-blue-600' : 'text-gray-400'}`}>
-                            <i className="fas fa-boxes text-xl mb-1"></i> 列表
-                        </button>
-                    </div>
-
-                    {/* 主內容區 */}
-                    <div className="flex-1 flex flex-col overflow-hidden relative bg-gray-50">
-                        {/* 頂部 Header */}
-                        <header className="h-16 bg-white/80 backdrop-blur shadow-sm border-b border-gray-200 flex items-center justify-between px-6 z-10 sticky top-0">
-                            <h1 className="text-xl font-bold text-gray-800 capitalize tracking-tight">
-                                {view === 'dashboard' ? '戰情總覽 Dashboard' : view === 'inbound' ? '入庫作業 Inbound' : '庫存報表 Inventory'}
-                            </h1>
-                            <div className="flex items-center gap-3">
-                                <div className="hidden md:block text-right">
-                                    <p className="text-sm font-bold text-gray-800">Admin User</p>
-                                    <p className="text-xs text-green-500 flex items-center justify-end gap-1"><span className="w-2 h-2 rounded-full bg-green-500"></span> Online</p>
-                                </div>
-                                <div className="h-9 w-9 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-md">
-                                    A
-                                </div>
-                            </div>
-                        </header>
-
-                        {/* 內容滾動區 */}
-                        <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 scroll-smooth">
-                            {view === 'dashboard' && <DashboardView />}
-                            {view === 'inbound' && <InboundView />}
-                            {view === 'inventory' && <InventoryView />}
-                        </main>
-                    </div>
+                    )}
                 </div>
             );
         }
