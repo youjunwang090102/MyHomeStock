@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MyHomeStock 家庭庫存管理</title>
+    <style>
+        /* 頁面美化樣式 */
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background-color: #f4f4f9; color: #333; }
+        h2 { text-align: center; color: #2c3e50; }
+        .card { background: white; padding: 20px; margin-bottom: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        input, button, select { width: 100%; padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; }
+        button { background-color: #007bff; color: white; border: none; cursor: pointer; font-weight: bold; transition: background 0.2s; }
+        button:hover { background-color: #0056b3; }
+        button.secondary { background-color: #6c757d; }
+        button.delete-btn { background-color: #dc3545; width: auto; padding: 5px 10px; margin-left: 10px; font-size: 14px; }
+        .alert-box { background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: none; border: 1px solid #ffeeba; }
+        .success-msg { color: green; text-align: center; margin-top: 10px; font-weight: bold; display: none; }
+        #reader { width: 100%; margin-bottom: 10px; border-radius: 8px; overflow: hidden; }
+        ul { padding-left: 0; list-style: none; }
+        li { background: #fff; border-bottom: 1px solid #eee; padding: 10px; display: flex; justify-content: space-between; align-items: center; }
+        li:last-child { border-bottom: none; }
+        .item-info { flex-grow: 1; }
+        .exp-date { font-size: 0.9em; color: #666; }
+        .exp-warning { color: #d9534f; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h2>🏠 MyHomeStock 庫存管理</h2>
+
+    <div id="alert-section" class="alert-box">
+        <h3>⚠️ 即將過期清單 (30天內)</h3>
+        <ul id="alert-list"></ul>
+    </div>
+
+    <div class="card">
+        <h3>📦 新增/查詢商品</h3>
+        
+        <div id="reader"></div>
+        <button onclick="startScan()" class="secondary">📷 啟動相機掃描條碼</button>
+        
+        <hr style="margin: 20px 0; border: 0; border-top: 1px solid #eee;">
+
+        <label>條碼：</label>
+        <input type="text" id="barcode" placeholder="掃描或手動輸入...">
+        
+        <label>品名：</label>
+        <input type="text" id="productName" placeholder="例如：維力炸醬麵 (自動記憶)">
+        
+        <label>有效期限：</label>
+        <input type="date" id="expiryDate">
+        
+        <label>存放位置：</label>
+        <input type="text" id="location" placeholder="例如：儲藏室A">
+
+        <button onclick="saveItem()">💾 確認入庫</button>
+        <div id="msg" class="success-msg">✅ 入庫成功！</div>
+    </div>
+
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    
+    <script type="module">
+        // -----------------------------------------------------------
+        // 這裡使用的是穩定的 Firebase 版本 (v10.13.1)
+        // -----------------------------------------------------------
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js";
+        import { getFirestore, collection, addDoc, getDoc, setDoc, doc, query, where, getDocs, deleteDoc, Timestamp } 
+        from "https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js";
+
+        // 您的設定檔 (已填入)
+        const firebaseConfig = {
+            apiKey: "AIzaSyD42okuxyOdqSJ8nAVtEwlu0PspzxK45Wk",
+            authDomain: "myhomestock.firebaseapp.com",
+            projectId: "myhomestock",
+            storageBucket: "myhomestock.firebasestorage.app",
+            messagingSenderId: "1017079171143",
+            appId: "1:1017079171143:web:cf575190e3954093e80962"
+        };
+
+        // 初始化 Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // --- 功能 1: 掃描功能 ---
+        let html5QrCode;
+        window.startScan = function() {
+            // 如果已經開啟，先關閉避免重複
+            if(html5QrCode) { 
+                html5QrCode.stop().then(() => { html5QrCode.clear(); });
+            }
+            
+            html5QrCode = new Html5Qrcode("reader");
+            html5QrCode.start(
+                { facingMode: "environment" }, // 使用後鏡頭
+                { fps: 10, qrbox: 250 },
+                (decodedText) => {
+                    // 掃描成功
+                    document.getElementById('barcode').value = decodedText;
+                    checkProductMemory(decodedText); // 查詢記憶
+                    // 掃描成功後自動停止相機
+                    html5QrCode.stop().then(() => {
+                         document.getElementById('reader').innerHTML = "";
+                    });
+                },
+                (errorMessage) => { /* 忽略掃描過程中的錯誤 */ }
+            );
+        }
+
+        // --- 功能 2: 記憶查詢 (輸入條碼後自動帶出名稱) ---
+        async function checkProductMemory(barcode) {
+            if(!barcode) return;
+            // 查詢 products_db 集合
+            const docRef = doc(db, "products_db", barcode);
+            
+            try {
+                const docSnap = await getDoc(docRef);
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    document.getElementById('productName').value = data.name;
+                    document.getElementById('location').value = data.defaultLocation || "";
+                }
+            } catch (e) {
+                console.error("讀取錯誤:", e);
+                // 如果第一次執行遇到權限錯誤，通常是 Firestore Rules 沒設好
+            }
+        }
+        
+        // 綁定條碼輸入框，手動輸入也可以觸發查詢
+        document.getElementById('barcode').addEventListener('change', (e) => checkProductMemory(e.target.value));
+
+        // --- 功能 3: 儲存入庫 ---
+        window.saveItem = async function() {
+            const barcode = document.getElementById('barcode').value;
+            const name = document.getElementById('productName').value;
+            const date = document.getElementById('expiryDate').value;
+            const loc = document.getElementById('location').value;
+            const msgDiv = document.getElementById('msg');
+
+            if(!barcode || !name || !date) { alert("請填寫 [條碼]、[品名] 與 [有效期限]！"); return; }
+
+            try {
+                // 1. 寫入庫存紀錄 (inventory)
+                await addDoc(collection(db, "inventory"), {
+                    barcode: barcode,
+                    name: name,
+                    expiryDate: date,
+                    location: loc,
+                    status: "active",
+                    createdAt: Timestamp.now()
+                });
+
+                // 2. 更新產品記憶 (products_db)，下次掃描就會記得
+                await setDoc(doc(db, "products_db", barcode), {
+                    name: name,
+                    defaultLocation: loc
+                });
+
+                // 顯示成功訊息並清空表單
+                msgDiv.style.display = "block";
+                setTimeout(() => {
+                    msgDiv.style.display = "none";
+                    document.getElementById('barcode').value = "";
+                    document.getElementById('productName').value = "";
+                    document.getElementById('expiryDate').value = "";
+                    // 位置通常不用清空，因為可能連續輸入同一櫃子的東西
+                }, 2000);
+                
+                // 重新整理列表
+                checkExpiringItems();
+
+            } catch (e) {
+                console.error("Error: ", e);
+                alert("儲存失敗！請確認 Firebase 規則是否已設為 Test Mode");
+            }
+        }
+
+        // --- 功能 4: 檢查即期品 (30天內) ---
+        async function checkExpiringItems() {
+            const today = new Date();
+            const future = new Date();
+            future.setDate(future.getDate() + 30);
+            
+            // 轉換日期格式 yyyy-mm-dd
+            const futureStr = future.toISOString().split('T')[0];
+
+            // 查詢：過期日 <= 未來30天 且 狀態是 active
+            const q = query(collection(db, "inventory"), 
+                where("expiryDate", "<=", futureStr),
+                where("status", "==", "active")
+            );
+
+            try {
+                const querySnapshot = await getDocs(q);
+                const list = document.getElementById('alert-list');
+                const section = document.getElementById('alert-section');
+                
+                list.innerHTML = ""; // 清空舊列表
+
+                let hasItem = false;
+                querySnapshot.forEach((docSnap) => {
+                    const item = docSnap.data();
+                    const docId = docSnap.id;
+                    
+                    hasItem = true;
+                    const li = document.createElement('li');
+                    
+                    // 計算剩餘天數
+                    const daysLeft = Math.ceil((new Date(item.expiryDate) - new Date()) / (1000 * 60 * 60 * 24));
+                    
+                    let statusText = "";
+                    let colorClass = "";
+                    
+                    if (daysLeft < 0) {
+                        statusText = `(已過期 ${Math.abs(daysLeft)} 天)`;
+                        colorClass = "exp-warning";
+                    } else {
+                        statusText = `(剩 ${daysLeft} 天)`;
+                        colorClass = daysLeft <= 7 ? "exp-warning" : "";
+                    }
+
+                    li.innerHTML = `
+                        <div class="item-info">
+                            <span class="${colorClass}"><b>${item.name}</b> ${statusText}</span><br>
+                            <span class="exp-date">到期: ${item.expiryDate} | 位置: ${item.location}</span>
+                        </div>
+                        <button class="delete-btn" onclick="deleteItem('${docId}')">吃掉了</button>
+                    `;
+                    list.appendChild(li);
+                });
+
+                section.style.display = hasItem ? 'block' : 'none';
+            } catch (e) {
+                console.log("讀取列表失敗 (如果是第一次執行，且資料庫是空的，這是正常的)");
+            }
+        }
+
+        // --- 功能 5: 刪除/消耗商品 ---
+        // 因為 module 範圍問題，需將函式掛載到 window
+        window.deleteItem = async function(docId) {
+            if(confirm("確定這個東西已經吃掉或用完了嗎？")) {
+                try {
+                    await deleteDoc(doc(db, "inventory", docId));
+                    checkExpiringItems(); // 重新整理列表
+                } catch(e) {
+                    alert("刪除失敗");
+                }
+            }
+        }
+
+        // 啟動時檢查一次
+        checkExpiringItems();
+    </script>
+</body>
+</html>
