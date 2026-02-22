@@ -8,16 +8,17 @@
     <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script> <script src="https://cdn.jsdelivr.net/npm/chart.js"></script> <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getFirestore, collection, addDoc, getDocs, updateDoc, doc, increment, query, where } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+        import { getFirestore, collection, addDoc, getDocs, updateDoc, doc, increment, query, where, deleteDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
         
-        // ★★★ 請在此填入您的 Firebase Config ★★★
+        // ★★★ 您的專屬設定 ★★★
         const firebaseConfig = {
-            const firebaseConfig = {
             apiKey: "AIzaSyD42okuxyOdqSJ8nAVtEwlu0PspzxK45Wk",
             authDomain: "myhomestock.firebaseapp.com",
             projectId: "myhomestock",
@@ -26,22 +27,30 @@
             appId: "1:1017079171143:web:cf575190e3954093e80962"
         };
 
-        window.app = initializeApp(firebaseConfig);
-        window.db = getFirestore(window.app);
+        // 初始化並掛載到 window 全域變數，讓下方的 React 使用
+        const app = initializeApp(firebaseConfig);
+        window.db = getFirestore(app);
+        
+        // 將 Firebase 功能掛載給 React 使用
         window.collection = collection;
         window.addDoc = addDoc;
         window.getDocs = getDocs;
         window.updateDoc = updateDoc;
+        window.deleteDoc = deleteDoc;
         window.doc = doc;
         window.increment = increment;
         window.query = query;
         window.where = where;
+
+        console.log("Firebase initialized successfully!");
     </script>
 
     <style>
-        /* 玻璃擬態質感 */
         .glass-panel { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
         body { background-color: #f3f4f6; }
+        /* 隱藏滾動條但保留功能 */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
     </style>
 </head>
 <body>
@@ -66,15 +75,15 @@
             </div>
         );
 
-        // --- 主程式：企業級 WMS ---
+        // --- 主程式 ---
         function App() {
-            const [view, setView] = useState('dashboard'); // dashboard, inbound, inventory
+            const [view, setView] = useState('dashboard'); 
             const [inventory, setInventory] = useState([]);
             const [loading, setLoading] = useState(false);
             const [scanResult, setScanResult] = useState("");
             const [stats, setStats] = useState({ totalItems: 0, totalValue: 0, lowStock: 0 });
+            const scannerRef = useRef(null);
 
-            // 初始化載入數據
             useEffect(() => {
                 fetchData();
             }, []);
@@ -82,108 +91,189 @@
             const fetchData = async () => {
                 setLoading(true);
                 try {
-                    // 這裡模擬從 Firebase 抓取數據 (需配合上方的 window.db)
-                    // 為了展示效果，若無數據會顯示預設值
                     if(window.db) {
                         const querySnapshot = await window.getDocs(window.collection(window.db, "inventory"));
                         let items = [];
                         let totalQ = 0;
                         let low = 0;
+                        const today = new Date();
+                        
                         querySnapshot.forEach((doc) => {
                             const d = doc.data();
                             items.push({ id: doc.id, ...d });
-                            totalQ += d.qty;
-                            // 簡單判斷過期
-                            const daysLeft = (new Date(d.expiryDate) - new Date()) / (1000 * 60 * 60 * 24);
-                            if(daysLeft < 30) low++;
+                            totalQ += parseInt(d.qty || 0);
+                            
+                            const expDate = new Date(d.expiryDate);
+                            const diffTime = expDate - today;
+                            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+                            
+                            if(diffDays < 30) low++;
                         });
+                        
+                        // 依照日期排序
+                        items.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
+                        
                         setInventory(items);
                         setStats({ totalItems: totalQ, totalValue: items.length * 100, lowStock: low });
                     }
-                } catch(e) { console.error(e); }
+                } catch(e) { 
+                    console.error("讀取失敗:", e); 
+                    // 如果是用戶還沒設 Rules，這裡通常會報錯
+                }
                 setLoading(false);
             };
 
-            // 掃碼處理 (模擬)
-            const handleScan = () => {
-                const scanner = new Html5Qrcode("reader");
-                scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, 
-                    (decodedText) => {
-                        setScanResult(decodedText);
-                        scanner.stop();
-                        document.getElementById("reader").innerHTML = "";
-                    }
-                );
+            const startScanner = () => {
+                if(scannerRef.current) return; // 避免重複啟動
+                
+                // 確保 DOM 已經渲染
+                setTimeout(() => {
+                    const scanner = new Html5Qrcode("reader");
+                    scannerRef.current = scanner;
+                    scanner.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, 
+                        (decodedText) => {
+                            setScanResult(decodedText);
+                            stopScanner();
+                        }
+                    ).catch(err => console.error("相機啟動失敗", err));
+                }, 100);
             };
 
+            const stopScanner = () => {
+                if(scannerRef.current) {
+                    scannerRef.current.stop().then(() => {
+                        scannerRef.current = null;
+                        document.getElementById("reader").innerHTML = "";
+                    }).catch(err => console.error(err));
+                }
+            };
+
+            // 入庫
             const handleInbound = async (e) => {
                 e.preventDefault();
+                const barcode = scanResult || e.target.barcodeInput?.value || "MANUAL-" + Date.now();
                 const name = e.target.name.value;
                 const qty = parseInt(e.target.qty.value);
                 const date = e.target.date.value;
-                
-                if(!window.db) return alert("請先設定 Firebase Config");
+                const loc = e.target.loc.value;
 
-                await window.addDoc(window.collection(window.db, "inventory"), {
-                    barcode: scanResult || "MANUAL",
-                    name: name,
-                    qty: qty,
-                    expiryDate: date,
-                    location: "A-01", // 預設倉位
-                    timestamp: new Date()
-                });
-                alert("入庫完成");
+                if(!window.db) return alert("Firebase 未連線");
+
+                // 檢查是否已有相同批次 (同條碼 + 同日期)
+                const q = window.query(
+                    window.collection(window.db, "inventory"), 
+                    window.where("barcode", "==", barcode),
+                    window.where("expiryDate", "==", date)
+                );
+                
+                const snapshot = await window.getDocs(q);
+
+                if(!snapshot.empty) {
+                    // 更新舊資料
+                    const docRef = snapshot.docs[0].ref;
+                    await window.updateDoc(docRef, { qty: window.increment(qty) });
+                    alert(`✅ 已併入現有批次，數量 +${qty}`);
+                } else {
+                    // 新增資料
+                    await window.addDoc(window.collection(window.db, "inventory"), {
+                        barcode: barcode,
+                        name: name,
+                        qty: qty,
+                        expiryDate: date,
+                        location: loc,
+                        timestamp: new Date()
+                    });
+                    alert("✅ 入庫成功");
+                }
+                
+                e.target.reset();
+                setScanResult("");
                 fetchData();
                 setView('dashboard');
             };
 
-            // --- 視圖 1: 儀表板 ---
+            // 消耗/出庫
+            const handleConsume = async (id, currentQty) => {
+                if(!confirm("確定要消耗 1 個單位嗎？")) return;
+                
+                const docRef = window.doc(window.db, "inventory", id);
+                if(currentQty <= 1) {
+                    await window.deleteDoc(docRef);
+                } else {
+                    await window.updateDoc(docRef, { qty: window.increment(-1) });
+                }
+                fetchData(); // 重新整理
+            };
+
+            // --- 視圖元件 ---
+            
             const DashboardView = () => (
                 <div className="space-y-6 animate-fade-in-up">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <KPICard title="總庫存數量" value={stats.totalItems} icon="fa-boxes" color="blue" subtext="現有商品總數" />
-                        <KPICard title="庫存警示" value={stats.lowStock} icon="fa-exclamation-triangle" color="red" subtext="30天內到期或缺貨" />
-                        <KPICard title="系統狀態" value="Online" icon="fa-server" color="green" subtext="Firebase 連線正常" />
+                        <KPICard title="庫存警示" value={stats.lowStock} icon="fa-exclamation-triangle" color="red" subtext="30天內到期" />
+                        <KPICard title="系統狀態" value="Online" icon="fa-wifi" color="green" subtext="雲端同步中" />
                     </div>
 
-                    {/* 這裡可以放圖表 (Chart.js 容器) */}
                     <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                        <h3 className="text-lg font-bold text-gray-800 mb-4">庫存趨勢分析</h3>
-                        <div className="h-64 bg-gray-50 flex items-center justify-center text-gray-400">
-                            [ 專業圖表區域 - 需累積數據後顯示 ]
+                        <h3 className="text-lg font-bold text-gray-800 mb-4">最近入庫紀錄</h3>
+                        <div className="text-sm text-gray-500">
+                           {inventory.slice(0, 5).map(item => (
+                               <div key={item.id} className="flex justify-between py-2 border-b last:border-0">
+                                   <span>{item.name}</span>
+                                   <span>{item.expiryDate}</span>
+                               </div>
+                           ))}
+                           {inventory.length === 0 && <p className="text-center py-4">尚無資料</p>}
                         </div>
                     </div>
                 </div>
             );
 
-            // --- 視圖 2: 入庫操作 ---
             const InboundView = () => (
-                <div className="max-w-xl mx-auto bg-white p-8 rounded-2xl shadow-lg border border-gray-100">
-                    <h2 className="text-2xl font-bold mb-6 text-gray-800 border-b pb-4">📦 標準入庫流程</h2>
+                <div className="max-w-xl mx-auto bg-white p-6 md:p-8 rounded-2xl shadow-lg border border-gray-100 relative">
+                    <h2 className="text-2xl font-bold mb-6 text-gray-800 border-b pb-4">📦 標準入庫</h2>
                     
-                    <div id="reader" className="w-full mb-4 rounded-lg overflow-hidden"></div>
-                    <button onClick={handleScan} className="w-full mb-6 bg-gray-800 text-white py-3 rounded-lg hover:bg-gray-700 transition flex items-center justify-center gap-2">
-                        <i className="fas fa-barcode"></i> 啟動掃描槍
-                    </button>
+                    <div id="reader" className="w-full mb-4 rounded-lg overflow-hidden bg-black"></div>
+                    
+                    {!scanResult ? (
+                        <button onClick={startScanner} type="button" className="w-full mb-6 bg-gray-800 text-white py-3 rounded-lg hover:bg-gray-700 transition flex items-center justify-center gap-2">
+                            <i className="fas fa-barcode"></i> 啟動掃描槍
+                        </button>
+                    ) : (
+                        <div className="mb-6 bg-green-50 p-3 rounded-lg border border-green-200 text-green-800 flex justify-between items-center">
+                            <span>掃描到: <strong>{scanResult}</strong></span>
+                            <button onClick={() => {setScanResult(""); stopScanner();}} className="text-sm underline">重新掃描</button>
+                        </div>
+                    )}
 
                     <form onSubmit={handleInbound} className="space-y-4">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">條碼 ID</label>
-                            <input type="text" value={scanResult} readOnly className="mt-1 block w-full px-4 py-3 bg-gray-50 border border-gray-300 rounded-lg text-gray-900 focus:ring-blue-500 focus:border-blue-500" placeholder="等待掃描..." />
-                        </div>
+                        {!scanResult && (
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">條碼 ID (未掃描時手輸)</label>
+                                <input name="barcodeInput" type="text" className="mt-1 block w-full px-4 py-3 bg-gray-50 border border-gray-300 rounded-lg" placeholder="可選..." />
+                            </div>
+                        )}
+                        
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <label className="block text-sm font-medium text-gray-700">產品名稱</label>
-                                <input name="name" type="text" required className="mt-1 block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500" placeholder="例如: 衛生紙" />
+                                <input name="name" type="text" required className="mt-1 block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-blue-500" placeholder="例: 鮮奶" />
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-gray-700">入庫數量</label>
-                                <input name="qty" type="number" defaultValue="1" className="mt-1 block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500" />
+                                <label className="block text-sm font-medium text-gray-700">數量</label>
+                                <input name="qty" type="number" defaultValue="1" className="mt-1 block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-blue-500" />
                             </div>
                         </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700">有效日期 (Expiry)</label>
-                            <input name="date" type="date" required className="mt-1 block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500" />
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">有效日期</label>
+                                <input name="date" type="date" required className="mt-1 block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-blue-500" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700">存放位置</label>
+                                <input name="loc" type="text" placeholder="例: A-01" className="mt-1 block w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-blue-500" />
+                            </div>
                         </div>
                         <button type="submit" className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 transition shadow-lg shadow-blue-500/30">
                             確認入庫 (Confirm)
@@ -192,38 +282,54 @@
                 </div>
             );
 
-            // --- 視圖 3: 庫存總表 ---
             const InventoryView = () => (
-                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                    <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center">
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden pb-20">
+                    <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
                         <h3 className="text-lg font-bold text-gray-800">SKU 列表 ({inventory.length})</h3>
-                        <button onClick={fetchData} className="text-blue-600 hover:text-blue-800 text-sm font-bold"><i className="fas fa-sync-alt"></i> 刷新</button>
+                        <button onClick={fetchData} className="text-blue-600 hover:text-blue-800 text-sm font-bold bg-white px-3 py-1 rounded border shadow-sm"><i className="fas fa-sync-alt"></i> 刷新</button>
                     </div>
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm text-left text-gray-500">
-                            <thead className="text-xs text-gray-700 uppercase bg-gray-50">
+                            <thead className="text-xs text-gray-700 uppercase bg-gray-100">
                                 <tr>
-                                    <th className="px-6 py-3">產品名稱</th>
-                                    <th className="px-6 py-3">數量</th>
-                                    <th className="px-6 py-3">效期</th>
-                                    <th className="px-6 py-3">狀態</th>
+                                    <th className="px-4 py-3">品名</th>
+                                    <th className="px-4 py-3">數量</th>
+                                    <th className="px-4 py-3">效期/狀態</th>
+                                    <th className="px-4 py-3">位置</th>
+                                    <th className="px-4 py-3 text-right">操作</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {inventory.map((item) => (
-                                    <tr key={item.id} className="bg-white border-b hover:bg-gray-50">
-                                        <td className="px-6 py-4 font-medium text-gray-900">{item.name}</td>
-                                        <td className="px-6 py-4">{item.qty}</td>
-                                        <td className="px-6 py-4">{item.expiryDate}</td>
-                                        <td className="px-6 py-4">
-                                            <span className={`px-2 py-1 rounded text-xs font-bold ${item.qty < 3 ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
-                                                {item.qty < 3 ? '低庫存' : '正常'}
-                                            </span>
-                                        </td>
-                                    </tr>
-                                ))}
+                                {inventory.map((item) => {
+                                    const today = new Date().toISOString().split('T')[0];
+                                    const isExpired = item.expiryDate < today;
+                                    const isNear = item.expiryDate < new Date(Date.now() + 30*86400000).toISOString().split('T')[0];
+                                    
+                                    return (
+                                        <tr key={item.id} className="bg-white border-b hover:bg-gray-50 transition">
+                                            <td className="px-4 py-4 font-bold text-gray-800">{item.name} <br/><span className="text-xs text-gray-400 font-normal">{item.barcode}</span></td>
+                                            <td className="px-4 py-4 text-lg">{item.qty}</td>
+                                            <td className="px-4 py-4">
+                                                <div className="flex flex-col gap-1">
+                                                    <span className="text-gray-900">{item.expiryDate}</span>
+                                                    {isExpired ? 
+                                                        <span className="inline-block px-2 py-0.5 rounded text-xs font-bold bg-red-100 text-red-800 w-fit">已過期</span> :
+                                                        (isNear ? <span className="inline-block px-2 py-0.5 rounded text-xs font-bold bg-orange-100 text-orange-800 w-fit">即期品</span> :
+                                                        <span className="inline-block px-2 py-0.5 rounded text-xs font-bold bg-green-100 text-green-800 w-fit">正常</span>)
+                                                    }
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-4"><span className="bg-gray-100 px-2 py-1 rounded text-xs">{item.location || '未定'}</span></td>
+                                            <td className="px-4 py-4 text-right">
+                                                <button onClick={() => handleConsume(item.id, item.qty)} className="bg-red-50 text-red-600 hover:bg-red-100 px-3 py-1 rounded border border-red-200 text-xs font-bold transition">
+                                                    消耗 -1
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                                 {inventory.length === 0 && (
-                                    <tr><td colSpan="4" className="text-center py-8 text-gray-400">目前無庫存數據</td></tr>
+                                    <tr><td colSpan="5" className="text-center py-10 text-gray-400">目前倉庫空空如也</td></tr>
                                 )}
                             </tbody>
                         </table>
@@ -231,59 +337,63 @@
                 </div>
             );
 
-            // --- 主介面佈局 ---
+            // --- 佈局與導航 ---
             return (
-                <div className="flex h-screen overflow-hidden">
-                    {/* 側邊欄 (Sidebar) */}
-                    <div className="w-64 bg-gray-900 text-white hidden md:flex flex-col">
-                        <div className="p-6 text-2xl font-bold tracking-tighter flex items-center gap-2">
+                <div className="flex h-screen overflow-hidden font-sans">
+                    {/* PC 側邊欄 */}
+                    <div className="w-64 bg-slate-900 text-white hidden md:flex flex-col shadow-2xl z-20">
+                        <div className="p-6 text-2xl font-bold tracking-tighter flex items-center gap-2 border-b border-slate-800">
                             <i className="fas fa-cube text-blue-500"></i> PRO<span className="text-blue-500">WMS</span>
                         </div>
-                        <nav className="flex-1 px-4 space-y-2 mt-4">
-                            <button onClick={() => setView('dashboard')} className={`w-full text-left px-4 py-3 rounded-lg transition flex items-center gap-3 ${view === 'dashboard' ? 'bg-blue-600 shadow-lg shadow-blue-900/50' : 'hover:bg-gray-800 text-gray-400'}`}>
-                                <i className="fas fa-tachometer-alt"></i> 戰情總覽
+                        <nav className="flex-1 px-4 space-y-2 mt-6">
+                            <button onClick={() => setView('dashboard')} className={`w-full text-left px-4 py-3 rounded-xl transition flex items-center gap-3 ${view === 'dashboard' ? 'bg-blue-600 shadow-lg shadow-blue-900/50 text-white' : 'hover:bg-slate-800 text-slate-400'}`}>
+                                <i className="fas fa-chart-pie w-6"></i> 戰情總覽
                             </button>
-                            <button onClick={() => setView('inbound')} className={`w-full text-left px-4 py-3 rounded-lg transition flex items-center gap-3 ${view === 'inbound' ? 'bg-blue-600 shadow-lg shadow-blue-900/50' : 'hover:bg-gray-800 text-gray-400'}`}>
-                                <i className="fas fa-dolly"></i> 入庫作業
+                            <button onClick={() => setView('inbound')} className={`w-full text-left px-4 py-3 rounded-xl transition flex items-center gap-3 ${view === 'inbound' ? 'bg-blue-600 shadow-lg shadow-blue-900/50 text-white' : 'hover:bg-slate-800 text-slate-400'}`}>
+                                <i className="fas fa-dolly w-6"></i> 入庫作業
                             </button>
-                            <button onClick={() => setView('inventory')} className={`w-full text-left px-4 py-3 rounded-lg transition flex items-center gap-3 ${view === 'inventory' ? 'bg-blue-600 shadow-lg shadow-blue-900/50' : 'hover:bg-gray-800 text-gray-400'}`}>
-                                <i className="fas fa-list"></i> 庫存報表
+                            <button onClick={() => {setView('inventory'); fetchData();}} className={`w-full text-left px-4 py-3 rounded-xl transition flex items-center gap-3 ${view === 'inventory' ? 'bg-blue-600 shadow-lg shadow-blue-900/50 text-white' : 'hover:bg-slate-800 text-slate-400'}`}>
+                                <i className="fas fa-boxes w-6"></i> 庫存報表
                             </button>
                         </nav>
-                        <div className="p-4 border-t border-gray-800 text-xs text-gray-500 text-center">
-                            Enterprise Edition v2.0
+                        <div className="p-4 border-t border-slate-800 text-xs text-slate-500 text-center">
+                            Enterprise Edition v2.1
                         </div>
                     </div>
 
-                    {/* 手機版底部導航 (Mobile Nav) */}
-                    <div className="md:hidden fixed bottom-0 w-full bg-white border-t z-50 flex justify-around py-3 text-xs shadow-[0_-5px_10px_rgba(0,0,0,0.05)]">
-                        <button onClick={() => setView('dashboard')} className={`flex flex-col items-center ${view === 'dashboard' ? 'text-blue-600' : 'text-gray-400'}`}>
-                            <i className="fas fa-tachometer-alt text-xl mb-1"></i> 總覽
+                    {/* 手機底部導航 */}
+                    <div className="md:hidden fixed bottom-0 w-full bg-white border-t z-50 flex justify-around py-2 text-xs shadow-[0_-5px_20px_rgba(0,0,0,0.05)] safe-area-pb">
+                        <button onClick={() => setView('dashboard')} className={`flex flex-col items-center p-2 rounded-lg ${view === 'dashboard' ? 'text-blue-600' : 'text-gray-400'}`}>
+                            <i className="fas fa-chart-pie text-xl mb-1"></i> 總覽
                         </button>
-                        <button onClick={() => setView('inbound')} className={`flex flex-col items-center ${view === 'inbound' ? 'text-blue-600' : 'text-gray-400'}`}>
-                            <i className="fas fa-plus-circle text-4xl -mt-6 bg-white rounded-full text-blue-600 shadow-lg"></i>
+                        <button onClick={() => setView('inbound')} className={`flex flex-col items-center justify-center w-14 h-14 -mt-8 bg-blue-600 rounded-full shadow-lg shadow-blue-500/40 border-4 border-gray-100 text-white`}>
+                            <i className="fas fa-plus text-xl"></i>
                         </button>
-                        <button onClick={() => setView('inventory')} className={`flex flex-col items-center ${view === 'inventory' ? 'text-blue-600' : 'text-gray-400'}`}>
-                            <i className="fas fa-list text-xl mb-1"></i> 列表
+                        <button onClick={() => {setView('inventory'); fetchData();}} className={`flex flex-col items-center p-2 rounded-lg ${view === 'inventory' ? 'text-blue-600' : 'text-gray-400'}`}>
+                            <i className="fas fa-boxes text-xl mb-1"></i> 列表
                         </button>
                     </div>
 
                     {/* 主內容區 */}
-                    <div className="flex-1 flex flex-col overflow-hidden relative">
-                        {/* 頂部導航 */}
-                        <header className="h-16 bg-white shadow-sm border-b border-gray-100 flex items-center justify-between px-6 z-10">
-                            <h1 className="text-xl font-bold text-gray-800 capitalize">{view === 'dashboard' ? '戰情總覽' : view === 'inbound' ? '入庫作業' : '庫存報表'}</h1>
-                            <div className="flex items-center gap-4">
+                    <div className="flex-1 flex flex-col overflow-hidden relative bg-gray-50">
+                        {/* 頂部 Header */}
+                        <header className="h-16 bg-white/80 backdrop-blur shadow-sm border-b border-gray-200 flex items-center justify-between px-6 z-10 sticky top-0">
+                            <h1 className="text-xl font-bold text-gray-800 capitalize tracking-tight">
+                                {view === 'dashboard' ? '戰情總覽 Dashboard' : view === 'inbound' ? '入庫作業 Inbound' : '庫存報表 Inventory'}
+                            </h1>
+                            <div className="flex items-center gap-3">
                                 <div className="hidden md:block text-right">
-                                    <p className="text-sm font-bold text-gray-800">管理員</p>
-                                    <p className="text-xs text-gray-500">Warehouse Admin</p>
+                                    <p className="text-sm font-bold text-gray-800">Admin User</p>
+                                    <p className="text-xs text-green-500 flex items-center justify-end gap-1"><span className="w-2 h-2 rounded-full bg-green-500"></span> Online</p>
                                 </div>
-                                <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-blue-500 to-purple-500"></div>
+                                <div className="h-9 w-9 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-md">
+                                    A
+                                </div>
                             </div>
                         </header>
 
                         {/* 內容滾動區 */}
-                        <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-24">
+                        <main className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 scroll-smooth">
                             {view === 'dashboard' && <DashboardView />}
                             {view === 'inbound' && <InboundView />}
                             {view === 'inventory' && <InventoryView />}
